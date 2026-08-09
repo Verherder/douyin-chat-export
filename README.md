@@ -161,7 +161,12 @@ cd frontend && npm install && npm run build && cd ..
 python3 -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
 ```
 
-浏览 `http://localhost:8000`，控制面板 `http://localhost:8000/panel`。
+浏览 `http://localhost:8000`。点击顶部的 **管理与导出** 可进入控制面板；也可以直接访问
+`http://localhost:8000/panel`。
+
+macOS 也可以在 Finder 中双击项目根目录的 `douyin-chat-export.command`。脚本会使用
+`space` Conda 环境、自动构建前端，并在服务就绪后打开浏览器。默认端口为 8000，可用
+`DOUYIN_CHAT_PORT=8080 ./douyin-chat-export.command` 临时修改。
 
 <details>
 <summary>Node.js 版本不对？</summary>

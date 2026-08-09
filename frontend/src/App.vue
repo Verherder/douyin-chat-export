@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import ConversationList from './components/ConversationList.vue'
 import MessageList from './components/MessageList.vue'
 import SearchBar from './components/SearchBar.vue'
@@ -14,7 +14,42 @@ const authChecking = ref(true)
 const authenticated = ref(false)
 const loginPassword = ref('')
 const loginError = ref('')
-const authToken = ref(localStorage.getItem('authToken') || '')
+const authToken = ref(localStorage.getItem('authToken') || localStorage.getItem('panel_token') || '')
+const scrapeStatus = ref('idle')
+const scrapeStatusText = ref('管理与导出')
+let controlStatusTimer = null
+
+function persistAuthToken(token) {
+  authToken.value = token
+  localStorage.setItem('authToken', token)
+  // The viewer and /panel are two frontends served by the same FastAPI app.
+  // Keep their token stores in sync so switching pages does not ask for the
+  // same password again. The cookie also authenticates file downloads.
+  localStorage.setItem('panel_token', token)
+  document.cookie = `auth_token=${encodeURIComponent(token)};path=/;max-age=${7 * 24 * 3600};SameSite=Lax`
+}
+
+async function loadControlStatus() {
+  if (!authenticated.value) return
+  try {
+    const res = await fetch('/panel/api/status')
+    if (!res.ok) return
+    const data = await res.json()
+    scrapeStatus.value = data.scrape?.status || 'idle'
+    scrapeStatusText.value = scrapeStatus.value === 'running'
+      ? '正在采集…'
+      : scrapeStatus.value === 'failed'
+        ? '采集失败 · 查看'
+        : '管理与导出'
+  } catch {}
+}
+
+function startControlStatusPolling() {
+  loadControlStatus()
+  if (!controlStatusTimer) {
+    controlStatusTimer = window.setInterval(loadControlStatus, 5000)
+  }
+}
 
 async function checkAuth() {
   try {
@@ -23,6 +58,8 @@ async function checkAuth() {
     const data = await res.json()
     if (!data.need_password || data.authenticated) {
       authenticated.value = true
+      if (authToken.value) persistAuthToken(authToken.value)
+      startControlStatusPolling()
     }
   } catch {}
   authChecking.value = false
@@ -41,9 +78,9 @@ async function doLogin() {
       return
     }
     const data = await res.json()
-    authToken.value = data.token
-    localStorage.setItem('authToken', data.token)
+    persistAuthToken(data.token)
     authenticated.value = true
+    startControlStatusPolling()
   } catch {
     loginError.value = '登录失败'
   }
@@ -52,7 +89,8 @@ async function doLogin() {
 // Inject auth token into all fetch requests
 const _origFetch = window.fetch
 window.fetch = function(url, opts = {}) {
-  if (authToken.value && typeof url === 'string' && url.startsWith('/api/')) {
+  if (authToken.value && typeof url === 'string' &&
+      (url.startsWith('/api/') || url.startsWith('/panel/api/'))) {
     opts.headers = opts.headers || {}
     if (opts.headers instanceof Headers) {
       opts.headers.set('Authorization', `Bearer ${authToken.value}`)
@@ -64,6 +102,9 @@ window.fetch = function(url, opts = {}) {
 }
 
 onMounted(checkAuth)
+onUnmounted(() => {
+  if (controlStatusTimer) window.clearInterval(controlStatusTimer)
+})
 
 const themes = [
   { id: 'dark',   label: '深蓝', color: '#1a1a2e' },
@@ -143,6 +184,16 @@ function navigateToMessage(item) {
         <button class="sidebar-toggle" @click="sidebarOpen = !sidebarOpen">☰</button>
         <div class="app-title">抖音聊天记录</div>
         <SearchBar @navigate="navigateToMessage" />
+        <a
+          class="control-center-btn"
+          :class="`status-${scrapeStatus}`"
+          href="/panel"
+          aria-label="打开管理与导出控制面板"
+          title="采集、定时任务、导出、媒体下载与登录设置"
+        >
+          <span class="control-status-dot"></span>
+          <span class="control-center-label">{{ scrapeStatusText }}</span>
+        </a>
         <div class="theme-switcher">
           <button
             v-for="t in themes"
@@ -285,6 +336,53 @@ function navigateToMessage(item) {
   max-width: 400px;
 }
 
+.control-center-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: border-color 0.15s, color 0.15s, filter 0.15s;
+}
+
+.control-center-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  filter: brightness(1.08);
+}
+
+.control-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+
+.control-center-btn.status-running .control-status-dot {
+  background: #e2b23c;
+  animation: controlPulse 1.5s infinite;
+}
+
+.control-center-btn.status-completed .control-status-dot {
+  background: #4dd08a;
+}
+
+.control-center-btn.status-failed .control-status-dot {
+  background: #ff5c6c;
+}
+
+@keyframes controlPulse {
+  50% { opacity: 0.35; }
+}
+
 .theme-switcher {
   display: flex;
   gap: 6px;
@@ -387,6 +485,14 @@ function navigateToMessage(item) {
     order: 1;
     flex-basis: 100%;
     max-width: none;
+  }
+
+  .control-center-label {
+    display: none;
+  }
+
+  .control-center-btn::after {
+    content: '管理';
   }
 }
 </style>
